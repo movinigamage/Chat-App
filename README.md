@@ -1,32 +1,41 @@
 # Real-Time Chat App on Kubernetes
 
-This project is a practical SIT727 cloud deployment version of a real-time chat
-application. The final implementation keeps the working app as one deployable
-service and focuses on Docker/Kubernetes evidence: configuration, secrets,
-persistence, scaling, health checks, resource limits, and documented deployment
-steps.
+This repository contains my SIT727 real-time chat application and the cloud
+deployment files I used for the final project demonstration. The application is
+built as a React frontend with a Node.js/Express and Socket.IO backend. For the
+final implementation, I kept the working application as one deployable service
+and focused on demonstrating Docker and Kubernetes deployment concepts clearly.
 
-## Architecture
+The project demonstrates containerisation, Kubernetes configuration management,
+secret handling, persistent MongoDB storage, Redis support for Socket.IO scaling,
+health checks, resource limits, HPA scaling, and a simple GitHub Actions CI
+workflow.
 
-- `frontend/`: React web client built with Vite.
-- `backend/`: Express + Socket.IO API and real-time messaging server.
-- `Dockerfile`: Multi-stage build that compiles the frontend and runs the
-  backend in one production container.
-- `docker-compose.yml`: Local stack with the app, MongoDB, and Redis.
-- `k8s/`: Kubernetes manifests for a defensible cloud deployment.
+## Project Structure
 
-The backend uses MongoDB for users, chats, and message history. Redis is used by
-the Socket.IO adapter when `REDIS_URL` is configured, allowing messages to fan
-out across multiple app replicas.
+- `frontend/` contains the React web client built with Vite.
+- `backend/` contains the Express API and Socket.IO real-time messaging server.
+- `Dockerfile` builds the frontend and backend into one production image.
+- `docker-compose.yml` runs the app locally with MongoDB and Redis.
+- `k8s/` contains the Kubernetes manifests used for the deployment demo.
+- `.github/workflows/ci.yml` contains the GitHub Actions CI workflow.
 
-Authentication is implemented with password-based login and signed JWTs. User
-passwords are stored as PBKDF2 hashes, REST chat APIs require a bearer token,
-and Socket.IO connections must present a valid token during the handshake.
+## Application Overview
+
+The application provides a real-time chat system with user registration, login,
+one-to-one conversations, message persistence, and live Socket.IO messaging.
+MongoDB stores users, chats, and messages. Redis is configured as the Socket.IO
+adapter so messages can be shared correctly when the chat app runs with multiple
+replicas.
+
+Authentication uses password-based login with signed JWTs. Passwords are stored
+as PBKDF2 hashes. The chat REST APIs require a bearer token, and Socket.IO
+connections must provide a valid token during connection setup.
 
 ## Configuration
 
-Runtime configuration is environment-based. Start from `.env.example` for local
-values:
+The application is configured through environment variables. The example values
+are shown in `.env.example`:
 
 ```powershell
 PORT=3000
@@ -37,13 +46,17 @@ REDIS_URL=redis://localhost:6379
 JWT_SECRET=replace-with-a-long-random-secret
 ```
 
-Do not commit real secrets or live database credentials. In Kubernetes,
-non-secret values are stored in `k8s/chat-configmap.yaml`, while sensitive
-values are stored in `k8s/chat-secret.yaml`.
+For Kubernetes, I separated configuration into:
 
-## Run Locally
+- `k8s/chat-configmap.yaml` for non-sensitive values
+- `k8s/chat-secret.yaml` for sensitive values such as `MONGO_URI` and
+  `JWT_SECRET`
 
-Install dependencies:
+Real database credentials and real secrets are not included in this repository.
+
+## Local Build
+
+Install frontend and backend dependencies:
 
 ```powershell
 cd frontend
@@ -59,46 +72,63 @@ cd ..\frontend
 npm run build
 ```
 
-Start the backend with environment variables configured:
+Start the backend after setting the required environment variables:
 
 ```powershell
 cd ..\backend
 npm start
 ```
 
-Open `http://localhost:3000`.
+The application runs at:
 
-## Run With Docker Compose
+```text
+http://localhost:3000
+```
 
-Docker Compose starts the app with MongoDB and Redis:
+## Docker Compose
+
+I used Docker Compose to test the application as a local containerised stack.
+This starts three containers:
+
+- chat app
+- MongoDB
+- Redis
+
+Run:
 
 ```powershell
 docker compose up --build
 ```
 
-Open:
+Useful URLs:
 
 ```text
 http://localhost:3000
 http://localhost:3000/healthz
 ```
 
+The `/healthz` endpoint returns:
+
+```json
+{"ok":true}
+```
+
 ## Kubernetes Deployment
 
-The Kubernetes manifests provide:
+The Kubernetes deployment includes:
 
-- Namespace isolation with `chat-app`
-- ConfigMap for non-secret app settings
-- Secret for `MONGO_URI` and `JWT_SECRET`
+- Namespace: `chat-app`
+- ConfigMap for app configuration
+- Secret for sensitive values
 - Chat app Deployment with 2 replicas
-- ClusterIP Service
-- Ingress with WebSocket-friendly timeout annotations
-- MongoDB Deployment with PVC persistence
-- Redis Deployment and Service for Socket.IO scaling support
-- CPU-based HPA
-- readiness/liveness probes
+- ClusterIP Service for the chat app
+- Ingress manifest with WebSocket-friendly annotations
+- MongoDB Deployment with a PersistentVolumeClaim
+- Redis Deployment and Service
+- CPU-based HorizontalPodAutoscaler
+- readiness and liveness probes
 - resource requests and limits
-- optional safe NetworkPolicy
+- optional NetworkPolicy
 
 Apply the manifests:
 
@@ -115,69 +145,74 @@ kubectl apply -f k8s/chat-ingress.yaml
 kubectl apply -f k8s/chat-hpa.yaml
 ```
 
-Apply the NetworkPolicy only after confirming your cluster networking supports
-it:
+I applied the NetworkPolicy only after confirming that the application was
+working, because strict network policies can block local demo access if the
+cluster networking is different:
 
 ```powershell
 kubectl apply -f k8s/chat-network-policy.yaml
 ```
 
-Check deployment evidence:
+Commands used to capture Kubernetes evidence:
 
 ```powershell
 kubectl get all -n chat-app
+kubectl get pods -n chat-app
 kubectl get pvc -n chat-app
 kubectl get configmap -n chat-app
 kubectl get secret -n chat-app
 kubectl get hpa -n chat-app
 kubectl describe deployment chat-app -n chat-app
-kubectl logs deployment/chat-app -n chat-app
+kubectl describe deployment mongo -n chat-app
+kubectl describe deployment redis -n chat-app
 ```
 
-Port-forward fallback for local demo:
+For local browser access through Kubernetes, I used port forwarding:
 
 ```powershell
-kubectl port-forward service/chat-service 3000:80 -n chat-app
+kubectl port-forward pod/<ready-chat-pod-name> 3000:3000 -n chat-app
 ```
 
-Then open:
+Then I opened:
 
 ```text
 http://localhost:3000
 http://localhost:3000/healthz
 ```
 
-## Rolling Update Demo
+## Rolling Updates
 
-The app Deployment uses a rolling update strategy:
+The chat Deployment uses a rolling update strategy:
 
 - `maxUnavailable: 1`
 - `maxSurge: 1`
 
-This supports a zero/low-downtime update demonstration when changing image tags:
+Example rollout command:
 
 ```powershell
 kubectl set image deployment/chat-app chat-container=chat-app:new-tag -n chat-app
 kubectl rollout status deployment/chat-app -n chat-app
 ```
 
-## Scaling Demo
+## Scaling
 
-The HPA scales the chat app between 2 and 10 replicas using CPU utilization:
+The HPA scales the chat app between 2 and 10 replicas using CPU utilisation:
 
 ```powershell
 kubectl get hpa -n chat-app
 kubectl describe hpa chat-hpa -n chat-app
 ```
 
-The original 4.2HD plan mentioned custom WebSocket metrics through Prometheus.
-For the final practical version, CPU-based HPA is used because it is simpler,
-demonstrable, and less risky within the available timeframe.
+My 4.2HD plan originally discussed custom WebSocket metrics. In this final
+implementation I used CPU-based HPA because it is stable, demonstrable, and more
+realistic for the project timeframe.
 
-## CI/CD Evidence
+## CI/CD
 
-The repository includes a GitHub Actions workflow at `.github/workflows/ci.yml`.
-On pushes and pull requests to `main`, it:
+I added a GitHub Actions workflow in `.github/workflows/ci.yml`. The workflow
+runs on pushes and pull requests to `main`.
+
+The workflow:
 
 - installs backend dependencies
 - checks backend JavaScript syntax
@@ -185,34 +220,38 @@ On pushes and pull requests to `main`, it:
 - builds the React frontend
 - builds the Docker image
 
-This demonstrates a simple cloud service lifecycle pipeline without changing the
-application runtime architecture.
+This provides basic cloud service lifecycle automation and confirms that the
+application can be built successfully after changes.
 
-## Alignment With The 4.2HD Plan
+## Alignment With My 4.2HD Plan
 
-Implemented cloud architecture evidence:
+This implementation matches the main cloud deployment goals from my 4.2HD plan:
 
-- Dockerized real-time chat app
-- JWT-protected REST APIs and Socket.IO connections
-- GitHub Actions CI validation and Docker image build workflow
+- real-time chat application deployed through Docker and Kubernetes
+- MongoDB-backed persistence
+- Redis support for multi-replica Socket.IO messaging
 - Kubernetes Namespace, ConfigMap, Secret, Deployment, Service, and Ingress
-- MongoDB persistence using a PVC
-- Redis support for multi-replica Socket.IO message fanout
-- HPA with CPU-based scaling
-- readiness/liveness probes
+- PersistentVolumeClaim for MongoDB
+- CPU-based HPA
+- readiness and liveness probes
 - resource requests and limits
-- safe NetworkPolicy option
-- documented local, Docker, and Kubernetes deployment workflows
+- JWT-protected REST APIs and Socket.IO connections
+- GitHub Actions CI workflow
 
-Documented simplifications from the 4.2HD check-in:
+I made some practical simplifications to keep the application stable for the
+final demonstration:
 
-- Auth and chat remain in one backend service instead of separate microservices.
+- Auth and chat are kept in one backend service instead of separate
+  microservices.
 - The frontend is built into the same production image and served by Express,
-  rather than a separate Nginx frontend service.
-- Group channels and file upload are not implemented in this final version.
-- Prometheus/Grafana, custom WebSocket HPA metrics, GKE deployment evidence,
-  CI/CD, and load testing are left as future improvements.
+  instead of running as a separate Nginx service.
+- Prometheus/Grafana and custom WebSocket HPA metrics are left as future
+  improvements.
+- GKE deployment is documented as a future improvement; my working evidence is
+  based on local Docker Desktop Kubernetes.
+- Group channels and file upload are not included in this final version because
+  the focus is on cloud architecture and deployment evidence.
 
-These simplifications keep the existing working application stable while still
-demonstrating the major Kubernetes and cloud deployment concepts required for a
-defensible final presentation.
+These choices allowed me to keep the application working while still
+demonstrating the main Kubernetes and cloud automation concepts required for the
+project.
