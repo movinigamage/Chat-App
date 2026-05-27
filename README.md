@@ -174,12 +174,27 @@ The original 4.2HD plan mentioned custom WebSocket metrics through Prometheus.
 For the final practical version, CPU-based HPA is used because it is simpler,
 demonstrable, and less risky within the available timeframe.
 
+## CI/CD Evidence
+
+The repository includes a GitHub Actions workflow at `.github/workflows/ci.yml`.
+On pushes and pull requests to `main`, it:
+
+- installs backend dependencies
+- checks backend JavaScript syntax
+- installs frontend dependencies
+- builds the React frontend
+- builds the Docker image
+
+This demonstrates a simple cloud service lifecycle pipeline without changing the
+application runtime architecture.
+
 ## Alignment With The 4.2HD Plan
 
 Implemented cloud architecture evidence:
 
 - Dockerized real-time chat app
 - JWT-protected REST APIs and Socket.IO connections
+- GitHub Actions CI validation and Docker image build workflow
 - Kubernetes Namespace, ConfigMap, Secret, Deployment, Service, and Ingress
 - MongoDB persistence using a PVC
 - Redis support for multi-replica Socket.IO message fanout

@@ -17,7 +17,7 @@ async function request(path, options = {}) {
 
 export default function Auth({ onAuthSuccess }) {
   const [isLogin, setIsLogin] = useState(true);
-  const [countryCode, setCountryCode] = useState("+94");
+  const [countryCode, setCountryCode] = useState("+61");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
