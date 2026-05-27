@@ -19,6 +19,10 @@ The backend uses MongoDB for users, chats, and message history. Redis is used by
 the Socket.IO adapter when `REDIS_URL` is configured, allowing messages to fan
 out across multiple app replicas.
 
+Authentication is implemented with password-based login and signed JWTs. User
+passwords are stored as PBKDF2 hashes, REST chat APIs require a bearer token,
+and Socket.IO connections must present a valid token during the handshake.
+
 ## Configuration
 
 Runtime configuration is environment-based. Start from `.env.example` for local
@@ -175,6 +179,7 @@ demonstrable, and less risky within the available timeframe.
 Implemented cloud architecture evidence:
 
 - Dockerized real-time chat app
+- JWT-protected REST APIs and Socket.IO connections
 - Kubernetes Namespace, ConfigMap, Secret, Deployment, Service, and Ingress
 - MongoDB persistence using a PVC
 - Redis support for multi-replica Socket.IO message fanout

@@ -9,9 +9,11 @@ const { createAdapter } = require("@socket.io/redis-adapter");
 require("dotenv").config();
 const { parsePhoneInput, trimValue } = require("./phone");
 const { findUserByPhone, migrateUserPhonesToE164 } = require("./users");
+const { getBearerToken, hashPassword, signJwt, verifyJwt, verifyPassword } = require("./auth");
 
 const PORT = process.env.PORT || 3000;
 const CLIENT_URL = process.env.CLIENT_URL || process.env.CORS_ORIGIN || "*";
+const JWT_SECRET = process.env.JWT_SECRET;
 const app = express();
 const server = http.createServer(app);
 
@@ -39,7 +41,8 @@ app.use(express.json());
 const userSchema = new mongoose.Schema(
   {
     phone: { type: String, required: true, unique: true, trim: true },
-    name: { type: String, required: true, trim: true }
+    name: { type: String, required: true, trim: true },
+    passwordHash: { type: String, required: true }
   },
   { timestamps: true }
 );
@@ -120,6 +123,33 @@ async function validateRegisteredPhone(phone) {
   }
 }
 
+function createAuthResponse(user) {
+  const token = signJwt({ phone: user.phone, name: user.name }, JWT_SECRET);
+  return {
+    user: { phone: user.phone, name: user.name },
+    token
+  };
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    const token = getBearerToken(req);
+    const payload = verifyJwt(token, JWT_SECRET);
+    const phone = requirePhone(payload.phone, res);
+    if (!phone) return;
+
+    const user = await findUserByPhone(User, phone);
+    if (!user) {
+      return res.status(401).json({ error: "User account no longer exists" });
+    }
+
+    req.user = { phone: user.phone, name: user.name };
+    return next();
+  } catch (error) {
+    return res.status(401).json({ error: error.message || "Authentication failed" });
+  }
+}
+
 app.get("/healthz", (_req, res) => {
   res.status(200).json({ ok: true });
 });
@@ -130,6 +160,7 @@ app.post("/api/users/register", async (req, res) => {
     if (!phone) return;
 
     const name = trimValue(req.body.name) || phone;
+    const passwordHash = hashPassword(req.body.password);
 
     const existing = await findUserByPhone(User, phone);
     if (existing) {
@@ -138,8 +169,8 @@ app.post("/api/users/register", async (req, res) => {
       });
     }
 
-    const user = await User.create({ phone, name });
-    return res.status(201).json({ user: { phone: user.phone, name: user.name } });
+    const user = await User.create({ phone, name, passwordHash });
+    return res.status(201).json(createAuthResponse(user));
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({
@@ -158,6 +189,12 @@ app.post("/api/users/login", async (req, res) => {
     let user = await findUserByPhone(User, phone);
     if (!user) {
       return res.status(404).json({ error: `User with phone ${phone} is not registered` });
+    }
+    if (!user.passwordHash) {
+      return res.status(401).json({ error: "This account needs to be re-created with a password" });
+    }
+    if (!verifyPassword(req.body.password, user.passwordHash)) {
+      return res.status(401).json({ error: "Invalid phone number or password" });
     }
 
     if (user.phone !== phone) {
@@ -182,16 +219,19 @@ app.post("/api/users/login", async (req, res) => {
       }
     }
 
-    return res.status(200).json({ user: { phone: user.phone, name: user.name } });
+    return res.status(200).json(createAuthResponse(user));
   } catch (error) {
     return res.status(500).json({ error: error.message || "Login failed" });
   }
 });
 
-app.get("/api/chats", async (req, res) => {
+app.get("/api/users/me", requireAuth, (req, res) => {
+  return res.status(200).json({ user: req.user });
+});
+
+app.get("/api/chats", requireAuth, async (req, res) => {
   try {
-    const phone = requirePhone(req.query.phone, res);
-    if (!phone) return;
+    const phone = req.user.phone;
 
     const chats = await Chat.find({
       participants: phone,
@@ -230,10 +270,9 @@ app.get("/api/chats", async (req, res) => {
   }
 });
 
-app.post("/api/chats", async (req, res) => {
+app.post("/api/chats", requireAuth, async (req, res) => {
   try {
-    const phone = requirePhone(req.body.phone, res);
-    if (!phone) return;
+    const phone = req.user.phone;
 
     const peerPhone = requirePhone(req.body.peerPhone, res);
     if (!peerPhone) return;
@@ -286,11 +325,10 @@ app.post("/api/chats", async (req, res) => {
   }
 });
 
-app.get("/api/chats/:chatId/messages", async (req, res) => {
+app.get("/api/chats/:chatId/messages", requireAuth, async (req, res) => {
   try {
     const chatId = trimValue(req.params.chatId);
-    const phone = requirePhone(req.query.phone, res);
-    if (!phone) return;
+    const phone = req.user.phone;
     if (!chatId) {
       return res.status(400).json({ error: "chatId is required" });
     }
@@ -326,11 +364,10 @@ app.get("/api/chats/:chatId/messages", async (req, res) => {
   }
 });
 
-app.delete("/api/chats/:chatId", async (req, res) => {
+app.delete("/api/chats/:chatId", requireAuth, async (req, res) => {
   try {
     const chatId = trimValue(req.params.chatId);
-    const phone = requirePhone(req.query.phone, res);
-    if (!phone) return;
+    const phone = req.user.phone;
 
     console.log(`[Delete Chat] Request to delete chat: ${chatId} by user: ${phone}`);
 
@@ -396,14 +433,30 @@ app.delete("/api/chats/:chatId", async (req, res) => {
 const frontendDist = path.join(__dirname, "../frontend/dist");
 app.use(express.static(frontendDist));
 
-io.on("connection", (socket) => {
-  const parsed = parsePhoneInput(socket.handshake.query.phone);
-  if (!parsed.ok) {
-    socket.disconnect(true);
-    return;
-  }
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    const payload = verifyJwt(token, JWT_SECRET);
+    const parsed = parsePhoneInput(payload.phone);
+    if (!parsed.ok) {
+      return next(new Error(parsed.error));
+    }
 
-  const phone = parsed.phone;
+    const user = await findUserByPhone(User, parsed.phone);
+    if (!user) {
+      return next(new Error("User account no longer exists"));
+    }
+
+    socket.data.phone = user.phone;
+    socket.data.name = user.name;
+    return next();
+  } catch (error) {
+    return next(new Error(error.message || "Authentication failed"));
+  }
+});
+
+io.on("connection", (socket) => {
+  const phone = socket.data.phone;
   socket.data.phone = phone;
   socket.join(`user:${phone}`);
   console.log(`User connected: ${phone}`);

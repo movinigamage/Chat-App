@@ -19,6 +19,7 @@ export default function Auth({ onAuthSuccess }) {
   const [isLogin, setIsLogin] = useState(true);
   const [countryCode, setCountryCode] = useState("+94");
   const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -76,6 +77,15 @@ export default function Auth({ onAuthSuccess }) {
     }
 
     const cleanName = name.trim();
+    const cleanPassword = password.trim();
+    if (!cleanPassword) {
+      setError("Password is required");
+      return;
+    }
+    if (!isLogin && cleanPassword.length < 8) {
+      setError("Password must be at least 8 characters");
+      return;
+    }
 
     setError("");
     setLoading(true);
@@ -85,14 +95,15 @@ export default function Auth({ onAuthSuccess }) {
       if (isLogin) {
         data = await request("/api/users/login", {
           method: "POST",
-          body: JSON.stringify({ phone: parsed.phone })
+          body: JSON.stringify({ phone: parsed.phone, password: cleanPassword })
         });
       } else {
         data = await request("/api/users/register", {
           method: "POST",
           body: JSON.stringify({
             phone: parsed.phone,
-            name: cleanName || parsed.phone
+            name: cleanName || parsed.phone,
+            password: cleanPassword
           })
         });
       }
@@ -100,9 +111,11 @@ export default function Auth({ onAuthSuccess }) {
       // Success
       localStorage.setItem("chat:selfPhone", data.user.phone);
       localStorage.setItem("chat:selfName", data.user.name || data.user.phone);
+      localStorage.setItem("chat:authToken", data.token);
       onAuthSuccess({
         phone: data.user.phone,
-        name: data.user.name || data.user.phone
+        name: data.user.name || data.user.phone,
+        token: data.token
       });
     } catch (err) {
       const message = err.message || "Authentication failed";
@@ -181,6 +194,20 @@ export default function Auth({ onAuthSuccess }) {
                 autoComplete="tel"
               />
             </div>
+          </div>
+
+          <div className="input-group slide-down">
+            <label htmlFor="auth-password">Password</label>
+            <input
+              id="auth-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={isLogin ? "Enter your password" : "At least 8 characters"}
+              required
+              disabled={loading}
+              autoComplete={isLogin ? "current-password" : "new-password"}
+            />
           </div>
 
           {!isLogin && (

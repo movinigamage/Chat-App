@@ -8,9 +8,14 @@ import { playMessageSound, playSentSound } from "./components/AudioNotification"
 const socketUrl = import.meta.env.VITE_SOCKET_URL || window.location.origin;
 
 async function request(path, options = {}) {
+  const { token, headers, ...fetchOptions } = options;
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers
+    },
+    ...fetchOptions
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -23,6 +28,7 @@ async function request(path, options = {}) {
 export default function App() {
   const [selfPhone, setSelfPhone] = useState(() => localStorage.getItem("chat:selfPhone") || "");
   const [selfName, setSelfName] = useState(() => localStorage.getItem("chat:selfName") || "");
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem("chat:authToken") || "");
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(() => localStorage.getItem("chat:activeChatId") || "");
   const [messages, setMessages] = useState([]);
@@ -84,35 +90,35 @@ export default function App() {
   );
 
   const loadChats = useCallback(async () => {
-    if (!selfPhone) return;
+    if (!selfPhone || !authToken) return;
     try {
-      const data = await request(`/api/chats?phone=${encodeURIComponent(selfPhone)}`);
+      const data = await request("/api/chats", { token: authToken });
       setChats(data.chats);
     } catch (err) {
       setError(err.message || "Failed to load chats");
     }
-  }, [selfPhone]);
+  }, [selfPhone, authToken]);
 
   const loadMessages = useCallback(async () => {
-    if (!selfPhone || !activeChatId) return;
+    if (!selfPhone || !authToken || !activeChatId) return;
     try {
-      const data = await request(
-        `/api/chats/${encodeURIComponent(activeChatId)}/messages?phone=${encodeURIComponent(selfPhone)}`
-      );
+      const data = await request(`/api/chats/${encodeURIComponent(activeChatId)}/messages`, {
+        token: authToken
+      });
       setMessages(data.messages);
     } catch (err) {
       setError(err.message || "Failed to load messages");
     }
-  }, [selfPhone, activeChatId]);
+  }, [selfPhone, authToken, activeChatId]);
 
   // Handle connection and sockets
   useEffect(() => {
-    if (!selfPhone) return;
+    if (!selfPhone || !authToken) return;
 
     setConnectionState("connecting");
     const socket = io(socketUrl, {
       transports: ["websocket"],
-      query: { phone: selfPhone }
+      auth: { token: authToken }
     });
     socketRef.current = socket;
 
@@ -192,25 +198,26 @@ export default function App() {
       socketRef.current = null;
       setConnectionState("disconnected");
     };
-  }, [selfPhone, loadChats]);
+  }, [selfPhone, authToken, loadChats]);
 
-  // If a stored phone is no longer registered in Mongo, force-login again.
+  // If a stored token is no longer valid, force login again.
   useEffect(() => {
-    if (!selfPhone) return;
-    request("/api/users/login", {
-      method: "POST",
-      body: JSON.stringify({ phone: selfPhone, verifyOnly: true })
+    if (!selfPhone || !authToken) return;
+    request("/api/users/me", {
+      token: authToken
     }).catch(() => {
       localStorage.removeItem("chat:selfPhone");
       localStorage.removeItem("chat:selfName");
+      localStorage.removeItem("chat:authToken");
       setSelfPhone("");
       setSelfName("");
+      setAuthToken("");
       setChats([]);
       setActiveChatId("");
       setMessages([]);
       setError("");
     });
-  }, [selfPhone]);
+  }, [selfPhone, authToken]);
 
   // Join/leave room on active chat change
   useEffect(() => {
@@ -241,16 +248,22 @@ export default function App() {
     }
   }, [chats, activeChatId]);
 
-  const handleAuthSuccess = ({ phone: userPhone, name: userName }) => {
+  const handleAuthSuccess = ({ phone: userPhone, name: userName, token }) => {
+    localStorage.setItem("chat:selfPhone", userPhone);
+    localStorage.setItem("chat:selfName", userName || userPhone);
+    localStorage.setItem("chat:authToken", token);
     setSelfPhone(userPhone);
     setSelfName(userName);
+    setAuthToken(token);
   };
 
   const handleLogout = () => {
     localStorage.removeItem("chat:selfPhone");
     localStorage.removeItem("chat:selfName");
+    localStorage.removeItem("chat:authToken");
     setSelfPhone("");
     setSelfName("");
+    setAuthToken("");
     setChats([]);
     setMessages([]);
     setActiveChatId("");
@@ -264,6 +277,7 @@ export default function App() {
           // Sync logout
           setSelfPhone("");
           setSelfName("");
+          setAuthToken("");
           setChats([]);
           setMessages([]);
           setActiveChatId("");
@@ -272,6 +286,7 @@ export default function App() {
           // Sync login
           setSelfPhone(e.newValue);
           setSelfName(localStorage.getItem("chat:selfName") || "");
+          setAuthToken(localStorage.getItem("chat:authToken") || "");
         }
       }
     };
@@ -282,7 +297,8 @@ export default function App() {
   const handleCreateChat = async (peerPhone) => {
     const data = await request("/api/chats", {
       method: "POST",
-      body: JSON.stringify({ phone: selfPhone, peerPhone })
+      token: authToken,
+      body: JSON.stringify({ peerPhone })
     });
     await loadChats();
     setActiveChatId(data.chat.id);
@@ -291,8 +307,9 @@ export default function App() {
   const handleDeleteChat = async (chatId) => {
     if (!window.confirm("Are you sure you want to delete this chat? This will delete the conversation for you only; the other participant will keep their history.")) return;
     try {
-      await request(`/api/chats/${encodeURIComponent(chatId)}?phone=${encodeURIComponent(selfPhone)}`, {
-        method: "DELETE"
+      await request(`/api/chats/${encodeURIComponent(chatId)}`, {
+        method: "DELETE",
+        token: authToken
       });
       if (activeChatIdRef.current === chatId) {
         setActiveChatId("");
