@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chat-config
+  namespace: chat-app
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  CLIENT_URL: "*"
+  REDIS_URL: "redis://redis:6379"
